@@ -44,8 +44,46 @@ def slice_check(pr: dict, base: dict, spec: dict) -> tuple[list[str], list[str]]
       - fail if below "min", or if no_significant_drop and the paired CI over the slice's items
         lies entirely below 0
     Return (blocked ids like "slice:money_movement/pass_rate", report lines)."""
-    # TODO M5
-    return [], []
+    blocked, lines = [], []
+    bs = spec.get("bootstrap", {})
+    for slice_spec in spec.get("slices") or []:
+        name, metric = slice_spec["name"], slice_spec["metric"]
+        pr_items = per_item(pr, metric, slice_name=name)
+        base_items = per_item(base, metric, slice_name=name)
+        value = sum(pr_items.values()) / len(pr_items) if pr_items else None
+        threshold = slice_spec.get("min")
+        verdict, note = "ok", ""
+        if value is None:
+            verdict = "missing"
+        elif threshold is not None and value < threshold:
+            verdict = "fail"
+
+        if slice_spec.get("no_significant_drop"):
+            if not pr_items or set(pr_items) != set(base_items):
+                verdict = "unpaired"
+                note = "paired slice item sets differ or are empty"
+            else:
+                keys = sorted(pr_items)
+                delta, low, high = stats.paired_bootstrap(
+                    [pr_items[key] for key in keys],
+                    [base_items[key] for key in keys],
+                    n_resamples=bs.get("n_resamples", 1000),
+                    rng=bs.get("rng", 2027),
+                    confidence=bs.get("confidence", 0.95),
+                )
+                note = f"Δ {delta:+.3f} CI [{low:+.3f}, {high:+.3f}]"
+                if high < 0:
+                    verdict = "fail"
+
+        if verdict != "ok" and slice_spec.get("blocking"):
+            blocked.append(f"slice:{name}/{metric}")
+        label = "ok" if verdict == "ok" else ("BLOCK" if slice_spec.get("blocking") else "warn")
+        lines.append(
+            f"  slice:{name}/{metric:<14} {value!s:<8} "
+            f"{json.dumps({'min': threshold, 'no_significant_drop': slice_spec.get('no_significant_drop', False)})!s:<44} "
+            f"{note:<36} {label}"
+        )
+    return blocked, lines
 
 
 def check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> tuple[list[str], list[str]]:
