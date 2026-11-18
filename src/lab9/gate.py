@@ -17,6 +17,7 @@ from pathlib import Path
 from lab8.console import utf8_stdio
 from lab9 import stats
 from lab9.eval import SPEC, load_spec, per_item
+from lab9.graders import GRADERS
 
 
 def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> list[str]:
@@ -105,14 +106,14 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
         elif failures:
             problems.append(f"{label} has evaluator failures")
 
-    graded_metrics = [
+    row_metric_ids = [
         metric["id"] for metric in spec.get("metrics", [])
-        if metric.get("grader") and metric.get("level") != "system"
+        if metric["id"] in GRADERS
     ]
     for row in pr_rows:
         if not isinstance(row, dict):
             continue
-        for metric_id in graded_metrics:
+        for metric_id in row_metric_ids:
             value = row.get(metric_id)
             if value is None:
                 problems.append(f"row {row.get('item_id')}@{row.get('seed')} has missing {metric_id}")
@@ -124,6 +125,17 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
     if not isinstance(metrics, dict):
         problems.append("PR metrics are missing or invalid")
     else:
+        base_metrics = base.get("metrics")
+        if not isinstance(base_metrics, dict):
+            problems.append("baseline metrics are missing or invalid")
+        else:
+            missing = base_metrics.keys() - metrics.keys()
+            if missing:
+                problems.append(f"PR report metrics missing: {', '.join(sorted(missing))}")
+        configured = {metric["id"] for metric in spec.get("metrics", [])}
+        missing = configured - metrics.keys()
+        if missing:
+            problems.append(f"configured report metrics missing: {', '.join(sorted(missing))}")
         for metric_id, value in metrics.items():
             if isinstance(value, float) and not math.isfinite(value):
                 problems.append(f"metric {metric_id} is non-finite")
